@@ -1,0 +1,34 @@
+[tool.poetry]
+name = "super-voice-auto-trainer"
+version = "0.1.0"
+description = "A smart tool for training AI voice models from YouTube videos and audio files"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+packages = [{include = "voice_trainer.py"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+torch = "^2.0.0"
+pyannote-audio = {extras = ["separation"], version = "^3.3.2"}
+requests = "^2.31.0"
+pydub = "^0.25.1"
+click = "^8.1.7"
+python-dotenv = "^1.0.0"
+audio-separator = "0.34.1"
+onnxruntime-gpu = "^1.22.0"
+rich = "^13.7.0"
+webrtcvad = "^2.0.10"
+numpy = ">=2"
+yt-dlp = "^2025.6.25"
+
+[tool.poetry.scripts]
+voice-trainer = "voice_trainer:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.group.dev.dependencies]
+black = "^23.12.1"
+isort = "^5.13.2"
+flake8 = "^7.0.0"
