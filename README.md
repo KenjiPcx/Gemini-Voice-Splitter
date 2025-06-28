@@ -1,23 +1,21 @@
 # Super Voice Auto Trainer 🎤
 
-A smart tool for training AI voice models from multiple YouTube videos and audio files. This tool automatically separates voices from audio across multiple sources, matches characters between videos, stitches their audio together with silence removal, and creates realistic voice models using Fish Audio AI.
+An iterative voice training tool that builds character voice models gradually from individual audio clips. Process shorter audio sources one at a time, build a persistent character library, and create high-quality voice models using Gemini AI and Fish Audio.
 
 ## Features
 
-- 🎬 **Multi-Video Processing:** Download audio from multiple YouTube URLs simultaneously
-- 🤖 **AI-Powered Speaker Detection:** Choose between pyannote or Gemini AI for speaker separation
-- 🎵 Remove background music for cleaner voice separation
-- 🔊 Separate multiple voices with high accuracy
-- 🔇 **Voice Activity Detection (VAD):** Automatic silence removal with 0.5s buffers
-- 🔗 **Intelligent Audio Stitching:** Combine multiple sources before processing
-- 🎧 Interactive voice preview and selection system  
-- 🏷️ Smart labeling system with character suggestions
-- 📊 **Structured Output:** Pydantic-based data models for reliable AI responses
-- 🔍 **High-Confidence Refinement:** Second AI pass for quality assurance
-- 🐟 Integration with Fish Audio API for model creation
-- 🚀 Fast and efficient processing with GPU support (pyannote) or cloud AI (Gemini)
-- 📊 Beautiful terminal UI with status displays
-- 🧩 **Modular Architecture:** Clean, maintainable codebase with separate modules
+- 🔄 **Iterative Voice Building:** Build character voices gradually across multiple sessions
+- 📁 **Persistent Character Library:** Automatically saves and organizes voice clips by character
+- 🤖 **Gemini 2.5 Pro AI:** Advanced speaker detection with thinking mode for better accuracy
+- 📝 **Flexible Instructions:** Single prompt for context, target speakers, and custom instructions
+- 🎯 **Smart Target Selection:** CSV/array input support for multiple speakers
+- 🔊 **Individual Source Processing:** Each audio file processed separately for better accuracy
+- 🎵 **Background Music Removal:** Optional music separation for cleaner voice extraction
+- 📊 **Structured Output:** Reliable JSON parsing with multiple fallback methods
+- 🐟 **Multi-Clip Fish Models:** Trains voice models using all clips for each character
+- 🎧 **Interactive Refinement:** Chat with Gemini to fine-tune voice segments
+- 🧠 **Thinking Mode:** See Gemini's reasoning process during analysis
+- 📱 **Beautiful Terminal UI:** Rich console interface with real-time progress
 
 ## Installation
 
@@ -107,50 +105,37 @@ Alternatively, you can pass them as command-line options (see usage below).
 
 ### Basic Usage
 
-#### 🤖 Gemini AI Workflow (Recommended)
+#### 🤖 Iterative Voice Building (Recommended)
 ```bash
-# Process videos with AI-powered speaker detection
+# Process single sources to build character library gradually
+poetry run voice-trainer train --use-gemini \
+  "https://www.youtube.com/watch?v=VIDEO_ID"
+
+# Process multiple sources individually (not combined)
 poetry run voice-trainer train --use-gemini \
   "https://www.youtube.com/watch?v=VIDEO_ID1" \
-  "https://www.youtube.com/watch?v=VIDEO_ID2"
-
-# With background music removal
-poetry run voice-trainer train --use-gemini --remove-music \
-  "https://www.youtube.com/watch?v=VIDEO_ID1" \
+  "https://www.youtube.com/watch?v=VIDEO_ID2" \
   "/path/to/local/audio.wav"
 
-# Mix YouTube videos and local files
+# With background music removal for better voice isolation
+poetry run voice-trainer train --use-gemini --remove-music \
+  "https://www.youtube.com/watch?v=VIDEO_ID"
+
+# Mix YouTube videos and local files (each processed separately)
 poetry run voice-trainer train --use-gemini \
   "https://www.youtube.com/watch?v=VIDEO_ID" \
-  "/path/to/local/audio.wav" \
-  "/path/to/another/file.mp3"
+  "/path/to/local/audio.wav"
 ```
 
-#### 🔬 Traditional pyannote Workflow
+#### 🔬 Traditional pyannote Workflow (GPU Recommended)
 ```bash
-# Process with pyannote speech separation (requires GPU for best performance)
+# Use pyannote for local processing (requires good GPU)
 poetry run voice-trainer train \
-  "https://www.youtube.com/watch?v=VIDEO_ID1" \
-  "https://www.youtube.com/watch?v=VIDEO_ID2"
+  "https://www.youtube.com/watch?v=VIDEO_ID"
 
 # With background music removal
 poetry run voice-trainer train --remove-music \
-  "https://www.youtube.com/watch?v=VIDEO_ID1" \
-  "https://www.youtube.com/watch?v=VIDEO_ID2"
-
-# Skip music separation for faster iterations
-poetry run voice-trainer train --skip-music-separation \
-  "https://www.youtube.com/watch?v=VIDEO_ID1" \
-  "https://www.youtube.com/watch?v=VIDEO_ID2"
-```
-
-#### 🧪 Testing & Utilities
-```bash
-# Test timestamp extraction with sample data
-poetry run voice-trainer test-timestamps
-
-# Test sound removal with sample timestamps
-poetry run voice-trainer test-removal
+  "https://www.youtube.com/watch?v=VIDEO_ID"
 ```
 
 ### Using Poetry Shell
@@ -190,148 +175,213 @@ poetry run voice-trainer \
 - `--hf-token`: Hugging Face token (overrides .env file) - Required for pyannote
 - `--fish-api-key`: Fish Audio API key (overrides .env file)
 
-## AI Speaker Detection Workflows
+## New Iterative Workflow
 
-### 🤖 Gemini AI Workflow (Recommended)
+### 🔄 **How It Works**
 
-**Advantages:**
-- ✅ **More Accurate:** Better speaker identification than traditional models
-- ✅ **Descriptive:** Provides voice characteristics ("Deep male voice", "Excited female voice") 
-- ✅ **High Confidence:** Two-pass refinement ensures only the best segments
-- ✅ **No GPU Required:** Runs entirely through cloud API
-- ✅ **Structured Output:** Pydantic models ensure reliable data parsing
-- ✅ **Interactive:** Chat-like refinement process for each character
+This tool now uses an **iterative approach** instead of processing everything at once:
 
-**Process:**
-1. **🎬 Download & Combine** - All sources stitched together
-2. **🎵 Music Removal** - Optional background music separation
-3. **🎯 Target Selection** - Optionally specify which characters to extract
-4. **🤖 Gemini Analysis** - AI identifies speakers with voice descriptions (targeted or all)
-5. **🎭 Initial Extraction** - Creates speaker files from AI timestamps
-6. **👤 Interactive Review** - User confirms/edits character names
-7. **🔍 Gemini Refinement** - AI extracts only high-confidence segments
-8. **💬 Interactive Chat** - Fine-tune segments with conversational feedback
-9. **🐟 Model Creation** - Creates Fish Audio models with refined data
+**1. 📹 Individual Processing**
+- Each audio source (YouTube URL, local file) is processed separately
+- Shorter clips = better speaker accuracy and isolation
+- No complex multi-video stitching or timing issues
 
-### 🔬 pyannote Workflow (Traditional)
+**2. 🎯 Flexible Instructions**
+- Single prompt for context, target speakers, and custom instructions
+- Examples: "Harry Potter movie, extract Harry and Hermione"
+- CSV support: "Ross, Rachel, Monica" or "['Character 1', 'Character 2']"
 
-**Advantages:**
-- ✅ **Local Processing:** No API calls required
-- ✅ **GPU Accelerated:** Fast processing with CUDA support
-- ✅ **Established:** Proven speech separation technology
+**3. 📁 Persistent Character Library**
+- Characters saved in `character_library/` folder
+- Clips automatically organized by character name
+- Metadata tracking: clip count, duration, descriptions
 
-**Best For:**
-- Users with powerful GPUs
-- Offline processing requirements
-- When Gemini API is unavailable
+**4. 🤖 Gemini 2.5 Pro Analysis**
+- Advanced AI speaker detection with thinking mode
+- Context-aware character recognition
+- Structured JSON output with robust error handling
+
+**5. 🐟 Multi-Clip Voice Models**
+- Fish Audio trains models using ALL clips for each character
+- Each new session adds more clips to existing characters
+- Higher quality models from diverse voice samples
+
+### 🎯 **Interactive Experience**
+
+```
+🎯 Analysis Instructions (Optional)
+Examples:
+  📺 Context: 'Harry Potter movie scene'
+  🎯 Target speakers: 'Harry Potter, Hermione'
+  📝 Combined: 'Friends episode, get Ross and Rachel voices'
+
+Instructions: Harry Potter movie, extract Harry and Hermione
+
+📝 Instructions: Harry Potter movie, extract Harry and Hermione
+🎯 Detected targets: Harry, Hermione
+🧠 Gemini is analyzing the audio...
+🧐 I can detect 3 distinct voices in this Harry Potter clip
+✅ Gemini found 3 speakers with high confidence
+
+📚 Character Library:
+┌─────────────┬───────┬──────────┬────────────┐
+│ Character   │ Clips │ Duration │ Updated    │
+├─────────────┼───────┼──────────┼────────────┤
+│ Harry       │ 2     │ 45.2s    │ 2024-01-15 │
+│ Hermione    │ 1     │ 23.1s    │ 2024-01-14 │
+└─────────────┴───────┴──────────┴────────────┘
+
+🎤 Speaker: Speaker 1 (Young male voice) → Harry Potter
+📋 Existing character info:
+   • Current clips: 2
+   • Total duration: 45.2s
+   • Description: Young wizard protagonist
+Add new clip to existing character 'Harry Potter'? [Y/n]: y
+✅ Will add to existing character: Harry Potter
+```
+
+### 🆚 **Comparison: Old vs New**
+
+| **Old Multi-Video Approach** | **New Iterative Approach** |
+|-------------------------------|----------------------------|
+| ❌ Complex multi-video stitching | ✅ Simple individual processing |
+| ❌ Long audio = confusion | ✅ Short clips = better accuracy |
+| ❌ One-shot voice building | ✅ Gradual voice library building |
+| ❌ Temporary character data | ✅ Persistent character storage |
+| ❌ Single file per character | ✅ Multi-clip model training |
 
 ## Interactive Features
 
-### 🎯 Targeted Speaker Extraction
-When using Gemini AI, you can specify exactly which characters you want to extract:
+### 📝 **Flexible Instructions**
+The new workflow uses a single, flexible instruction field for everything:
 
+**Input Options:**
 ```bash
-# The tool will ask you to specify target speakers
-poetry run voice-trainer train --use-gemini "movie.mp4"
+# Context only
+"Harry Potter movie scene"
 
-# Example interaction:
-# 🎯 Target Specific Speakers (Optional)
-# Do you want to target specific speakers? [y/N]: y
-# Enter speaker/character name: Harry Potter
-# ✅ Added: Harry Potter
-# Add another speaker? [y/N]: y  
-# Enter speaker/character name: Hermione
-# ✅ Added: Hermione
-# 🎯 Will target: Harry Potter, Hermione
+# Target speakers (CSV)
+"Harry Potter, Hermione, Dumbledore"
+
+# Target speakers (Array)  
+"['Ross', 'Rachel', 'Monica']"
+
+# Combined instructions
+"Friends TV show episode, extract Ross and Rachel voices"
+
+# Custom analysis
+"Focus on clear dialogue, ignore background voices, prioritize emotional scenes"
 ```
 
-### 💬 Interactive Chat Refinement
-After initial processing, you can chat with Gemini to fine-tune each character's audio segments:
+### 📁 **Character Library Management**
+Build your voice library gradually across sessions:
 
-**Example Chat Commands:**
-- `"Focus on the emotional dialogue"`
-- `"Remove segments with background noise"`  
-- `"Keep only clear speech, no whispering"`
-- `"Prioritize segments where the character sounds angry"`
-- `"Remove parts where other characters are talking"`
+**First Session:**
+```bash
+# Process a Harry Potter clip
+Instructions: Harry Potter movie, extract Harry and Hermione
 
-**Chat Flow:**
+# Creates new characters:
+✅ Created new character: Harry Potter
+✅ Created new character: Hermione
+```
+
+**Later Sessions:**
+```bash
+# Process another clip with same characters
+Instructions: Another Harry Potter scene, get Harry and Ron
+
+# Adds to existing + creates new:
+✅ Will add to existing character: Harry Potter  
+✅ Created new character: Ron Weasley
+```
+
+### 💬 **Interactive Chat Refinement**
+Fine-tune segments with natural language:
+
 ```
 💬 Interactive Refinement Chat for Harry Potter
-📋 Current segments for Harry Potter (12 segments):
-  1. 0:15 - 0:23
-  2. 0:45 - 0:52
-  ...
-📊 Total duration: 45.2s
+Current segments: 8 segments, 34.5s total
 
-💬 Chat with Gemini (or 'done'/'restart'): Focus on emotional parts
-🤖 Gemini is processing your request...
-✅ Gemini refined segments (high)
-💡 Explanation: Kept segments with strong emotional delivery, removed neutral dialogue
+Chat: "Focus on the emotional parts, remove any laughing"
+🤖 Gemini refined segments (high confidence)
+💡 Kept emotional dialogue, removed 3 segments with laughter
+
+Chat: "Make sure it's only Harry speaking, no overlapping voices"  
+🤖 Gemini refined segments (high confidence)
+💡 Removed 2 segments with background conversation
+
+Chat: done
+✅ Final segments: 5 segments, 28.1s total
 ```
 
-**Special Commands:**
-- `done` - Finish refinement when satisfied
-- `restart` - Reset to original timestamps
-- Any natural language instruction for segment refinement
+### 🐟 **Multi-Clip Model Training**
+Fish Audio automatically uses all clips for each character:
 
-## Multi-Video Strategy
+```
+🐟 Creating Fish model for Harry Potter...
+🎤 Used 4 audio clips:
+  • 20241215_143022_Harry_Potter.wav (15.2s)
+  • 20241215_150145_Harry_Potter.wav (28.1s) 
+  • 20241214_162033_Harry_Potter.wav (12.8s)
+  • 20241213_091247_Harry_Potter.wav (22.4s)
+✅ Created model for Harry Potter: model_xyz123
+```
 
-### Best Practices for Character Voice Training:
+## Best Practices for Iterative Voice Training
 
-**🎯 Optimal Input Selection:**
-- Use 3-5 videos per character for best results
-- Choose videos with different speaking contexts (dialogue, monologue, emotional states)
-- Prefer videos with clear audio and minimal background noise
-- Mix short clips (30s-2min) for variety
+### 🎯 **Optimal Clip Selection**
+- **Short clips work better:** 30 seconds to 3 minutes per source
+- **Quality over quantity:** Better to have fewer perfect clips than many poor ones
+- **Diverse contexts:** Mix dialogue, monologue, emotional states
+- **Clear audio preferred:** Avoid heavy background noise or music
 
-**📊 Quality Tips:**
-- Enable `--remove-music` for videos with background music
-- Choose videos where target characters speak for at least 10-15 seconds total
-- Avoid videos with heavy audio effects or distortion
-- Use videos with multiple characters to train several voices simultaneously
+### 📈 **Building Character Libraries**
+- **Start small:** Begin with 1-2 good clips per character
+- **Add gradually:** Process new clips in separate sessions
+- **Consistent naming:** Use exact same character names across sessions
+- **Review before adding:** Check existing character info before confirming
 
-**⚡ Efficiency Tips:**
-- Process all related videos in one session to maintain character context
-- Use consistent character naming across videos (case-sensitive)
-- Preview audio before labeling to ensure voice quality
-- Skip low-quality or very short voice segments
+### 🎵 **Audio Quality Tips**
+- **Use `--remove-music`** for videos with background music
+- **Target 30-60 seconds** total per character for training
+- **Avoid overlapping speech** - Gemini will filter these out
+- **Multiple takes are good** - Fish models improve with diverse samples
 
-## Enhanced Multi-Video Workflow
+### ⚡ **Workflow Efficiency**
+- **Process individually:** Don't try to batch everything at once
+- **Use context instructions:** Help Gemini with show/movie context
+- **Leverage character library:** Shows existing characters before assignment
+- **Interactive refinement:** Use chat to fine-tune problem segments
 
-### Smart Multi-Video Processing:
-1. **🎬 Multi-Input**: Provide multiple YouTube URLs and/or local audio files
-2. **📥 Batch Download**: All audio sources are downloaded/loaded first (with caching)
-3. **🔇 VAD Pre-processing**: Remove silence/gaps from each video using Voice Activity Detection
-4. **🔗 Intelligent Stitching**: Combine cleaned audio with 0.5s buffers between segments
-5. **🎵 Music Removal** *(Optional/Skippable)*: Remove background music from combined audio
-6. **🔊 Single Voice Separation**: Run voice separation once on the optimized combined audio
-   - **📈 Detailed Progress**: Real-time progress tracking with pyannote ProgressHook
-   - Shows processing stages, completion percentages, and timing estimates
-7. **🎧 Interactive Selection**: Preview and choose which voice tracks to keep
-   - Each track contains segments from ALL videos automatically
-   - Play audio previews for each separated voice
-   - Keep, discard, or skip each track
-   - Beautiful terminal interface with tables and progress bars
+## File Organization
 
-### Final Processing:
-8. **🏷️ Character Labeling**: Label the long voice tracks with character names
-9. **🔇 Final VAD**: Additional silence removal using VAD for clean training audio
-10. **🐟 Model Training**: Create Fish Audio models with full-length character audio
-11. **📈 Results**: Get model IDs for high-quality character voices
+The tool automatically organizes your voice training data:
 
-### Progress Tracking Features:
-- **Real-time Updates**: See exactly what pyannote is doing at each stage
-- **No Conflicts**: Clean progress display without overlapping spinners
-- **Timing Estimates**: Duration tracking for each processing step
-- **Visual Feedback**: Color-coded status messages and progress indicators
+```
+project/
+├── character_library/           # Persistent character storage
+│   ├── characters.json         # Character metadata
+│   ├── Harry_Potter/           # Character folder
+│   │   └── clips/              # Individual voice clips
+│   │       ├── 20241215_143022_segment.wav
+│   │       ├── 20241215_150145_segment.wav
+│   │       └── ...
+│   ├── Hermione_Granger/
+│   │   └── clips/
+│   │       └── ...
+│   └── ...
+├── downloads/                   # Cached YouTube downloads
+│   ├── video_0_abc123.wav
+│   └── ...
+└── speaker_outputs/            # Legacy output folder
+```
 
-### Key Advantages:
-- ✅ **Full-Length Audio**: No automatic trimming - you get complete voice tracks
-- ✅ **Smart Combination**: Automatically combines same voices across all videos
-- ✅ **Single Processing**: Voice separation runs once on combined audio
-- ✅ **Manual Control**: You decide the final length and trimming
-- ✅ **Clean Audio**: Automatic silence removal and music separation
+### Character Library Benefits:
+- **📁 Persistent Storage**: Characters survive across sessions
+- **📊 Metadata Tracking**: Clip count, duration, source info
+- **🔍 Easy Management**: View library status anytime
+- **🐟 Multi-Clip Training**: Fish models use all clips automatically
 
 ## Supported Formats
 

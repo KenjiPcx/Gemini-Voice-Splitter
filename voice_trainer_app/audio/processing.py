@@ -324,15 +324,39 @@ class AudioProcessor:
                 console.print(f"❌ No valid segments extracted for {speaker_name}", style="red")
                 return AudioSegment.empty()
             
-            # Stitch segments together with small buffers
-            console.print(f"🔗 Stitching {len(segments)} segments...", style="cyan")
-            buffer = AudioSegment.silent(duration=500)  # 0.5 second buffer
+            # Stitch segments together with smooth transitions
+            console.print(f"🔗 Stitching {len(segments)} segments with smooth transitions...", style="cyan")
             
-            final_audio = segments[0]
-            for segment in segments[1:]:
-                final_audio += buffer + segment
+            if len(segments) == 1:
+                # Single segment - just apply fade in/out
+                final_audio = segments[0]
+                final_audio = final_audio.fade_in(50).fade_out(50)  # 50ms fades
+            else:
+                # Multiple segments - use crossfading for smooth transitions
+                final_audio = segments[0].fade_in(50)  # Fade in first segment
+                
+                for i, segment in enumerate(segments[1:], 1):
+                    # Apply fade out to current audio and fade in to new segment
+                    segment = segment.fade_in(50).fade_out(50)
+                    
+                    # Add intelligent spacing based on segment context
+                    # For quality voice training, add minimal natural pause
+                    pause_duration = 200  # 0.2 second natural pause
+                    natural_pause = AudioSegment.silent(duration=pause_duration)
+                    
+                    # Smooth concatenation: crossfade the end of final_audio with beginning of segment
+                    crossfade_duration = 25  # 25ms crossfade to avoid clicks
+                    
+                    # Add natural pause and crossfade
+                    final_audio = final_audio + natural_pause
+                    final_audio = final_audio.append(segment, crossfade=crossfade_duration)
+                    
+                    console.print(f"  ✅ Smoothly added segment {i+1}/{len(segments)}", style="dim green")
+                
+                # Final fade out
+                final_audio = final_audio.fade_out(50)
             
-            console.print(f"✅ [bold]{speaker_name}[/bold]: {total_extracted_duration:.1f}s extracted, {len(final_audio)/1000:.1f}s final", style="green")
+            console.print(f"✅ [bold]{speaker_name}[/bold]: {total_extracted_duration:.1f}s extracted, {len(final_audio)/1000:.1f}s final (smooth)", style="green")
             return final_audio
             
         except Exception as e:
