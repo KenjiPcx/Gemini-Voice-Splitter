@@ -5,16 +5,19 @@ A smart tool for training AI voice models from multiple YouTube videos and audio
 ## Features
 
 - 🎬 **Multi-Video Processing:** Download audio from multiple YouTube URLs simultaneously
+- 🤖 **AI-Powered Speaker Detection:** Choose between pyannote or Gemini AI for speaker separation
 - 🎵 Remove background music for cleaner voice separation
-- 🔊 Separate multiple voices using pyannote speech separation
-- 🔇 **NEW:** Voice Activity Detection (VAD) for automatic silence removal
-- 🔗 **NEW:** Intelligent audio stitching before voice separation
+- 🔊 Separate multiple voices with high accuracy
+- 🔇 **Voice Activity Detection (VAD):** Automatic silence removal with 0.5s buffers
+- 🔗 **Intelligent Audio Stitching:** Combine multiple sources before processing
 - 🎧 Interactive voice preview and selection system  
 - 🏷️ Smart labeling system with character suggestions
-- ⏱️ **NEW:** 2s buffer insertion between video sources
+- 📊 **Structured Output:** Pydantic-based data models for reliable AI responses
+- 🔍 **High-Confidence Refinement:** Second AI pass for quality assurance
 - 🐟 Integration with Fish Audio API for model creation
-- 🚀 Fast and efficient processing with GPU support
-- 📊 Beautiful progress tracking and status displays
+- 🚀 Fast and efficient processing with GPU support (pyannote) or cloud AI (Gemini)
+- 📊 Beautiful terminal UI with status displays
+- 🧩 **Modular Architecture:** Clean, maintainable codebase with separate modules
 
 ## Installation
 
@@ -77,7 +80,14 @@ Get your API key from Fish Audio:
 1. Sign up at https://fish.audio/
 2. Get your API key from the dashboard
 
-### 3. Environment Variables
+### 3. Gemini API Key (Optional - for AI-powered speaker separation)
+Get your API key from Google AI Studio:
+
+1. Go to https://aistudio.google.com/app/apikey
+2. Create a new API key
+3. This enables the advanced Gemini AI speaker detection workflow
+
+### 4. Environment Variables
 Create a `.env` file in the project root:
 
 ```bash
@@ -88,6 +98,7 @@ Then edit `.env` and add your credentials:
 ```bash
 HF_TOKEN=your_huggingface_token_here
 FISH_API_KEY=your_fish_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here  # Optional for AI speaker detection
 ```
 
 Alternatively, you can pass them as command-line options (see usage below).
@@ -96,26 +107,50 @@ Alternatively, you can pass them as command-line options (see usage below).
 
 ### Basic Usage
 
+#### 🤖 Gemini AI Workflow (Recommended)
 ```bash
-# Process a single YouTube video
-poetry run voice-trainer "https://www.youtube.com/watch?v=VIDEO_ID"
-
-# Process multiple YouTube videos (recommended for better character training)
-poetry run voice-trainer \
+# Process videos with AI-powered speaker detection
+poetry run voice-trainer train --use-gemini \
   "https://www.youtube.com/watch?v=VIDEO_ID1" \
-  "https://www.youtube.com/watch?v=VIDEO_ID2" \
-  "https://www.youtube.com/watch?v=VIDEO_ID3"
+  "https://www.youtube.com/watch?v=VIDEO_ID2"
+
+# With background music removal
+poetry run voice-trainer train --use-gemini --remove-music \
+  "https://www.youtube.com/watch?v=VIDEO_ID1" \
+  "/path/to/local/audio.wav"
 
 # Mix YouTube videos and local files
-poetry run voice-trainer \
+poetry run voice-trainer train --use-gemini \
   "https://www.youtube.com/watch?v=VIDEO_ID" \
   "/path/to/local/audio.wav" \
   "/path/to/another/file.mp3"
+```
 
-# With background music removal (recommended for music videos/movies)
-poetry run voice-trainer --remove-music \
+#### 🔬 Traditional pyannote Workflow
+```bash
+# Process with pyannote speech separation (requires GPU for best performance)
+poetry run voice-trainer train \
   "https://www.youtube.com/watch?v=VIDEO_ID1" \
   "https://www.youtube.com/watch?v=VIDEO_ID2"
+
+# With background music removal
+poetry run voice-trainer train --remove-music \
+  "https://www.youtube.com/watch?v=VIDEO_ID1" \
+  "https://www.youtube.com/watch?v=VIDEO_ID2"
+
+# Skip music separation for faster iterations
+poetry run voice-trainer train --skip-music-separation \
+  "https://www.youtube.com/watch?v=VIDEO_ID1" \
+  "https://www.youtube.com/watch?v=VIDEO_ID2"
+```
+
+#### 🧪 Testing & Utilities
+```bash
+# Test timestamp extraction with sample data
+poetry run voice-trainer test-timestamps
+
+# Test sound removal with sample timestamps
+poetry run voice-trainer test-removal
 ```
 
 ### Using Poetry Shell
@@ -147,10 +182,98 @@ poetry run voice-trainer \
 
 ### Command Options
 
+- `--use-gemini`: Use Gemini AI for speaker separation instead of pyannote (recommended)
+- `--gemini-api-key`: Gemini API key (overrides .env file)
 - `--remove-music`: Remove background music before voice separation (recommended for music videos/movies)
 - `--separator-model`: Music separation model to use (default: UVR-MDX-NET-Inst_HQ_3.onnx)
-- `--hf-token`: Hugging Face token (overrides .env file)
+- `--skip-music-separation`: Skip music separation step (useful if already processed)
+- `--hf-token`: Hugging Face token (overrides .env file) - Required for pyannote
 - `--fish-api-key`: Fish Audio API key (overrides .env file)
+
+## AI Speaker Detection Workflows
+
+### 🤖 Gemini AI Workflow (Recommended)
+
+**Advantages:**
+- ✅ **More Accurate:** Better speaker identification than traditional models
+- ✅ **Descriptive:** Provides voice characteristics ("Deep male voice", "Excited female voice") 
+- ✅ **High Confidence:** Two-pass refinement ensures only the best segments
+- ✅ **No GPU Required:** Runs entirely through cloud API
+- ✅ **Structured Output:** Pydantic models ensure reliable data parsing
+- ✅ **Interactive:** Chat-like refinement process for each character
+
+**Process:**
+1. **🎬 Download & Combine** - All sources stitched together
+2. **🎵 Music Removal** - Optional background music separation
+3. **🎯 Target Selection** - Optionally specify which characters to extract
+4. **🤖 Gemini Analysis** - AI identifies speakers with voice descriptions (targeted or all)
+5. **🎭 Initial Extraction** - Creates speaker files from AI timestamps
+6. **👤 Interactive Review** - User confirms/edits character names
+7. **🔍 Gemini Refinement** - AI extracts only high-confidence segments
+8. **💬 Interactive Chat** - Fine-tune segments with conversational feedback
+9. **🐟 Model Creation** - Creates Fish Audio models with refined data
+
+### 🔬 pyannote Workflow (Traditional)
+
+**Advantages:**
+- ✅ **Local Processing:** No API calls required
+- ✅ **GPU Accelerated:** Fast processing with CUDA support
+- ✅ **Established:** Proven speech separation technology
+
+**Best For:**
+- Users with powerful GPUs
+- Offline processing requirements
+- When Gemini API is unavailable
+
+## Interactive Features
+
+### 🎯 Targeted Speaker Extraction
+When using Gemini AI, you can specify exactly which characters you want to extract:
+
+```bash
+# The tool will ask you to specify target speakers
+poetry run voice-trainer train --use-gemini "movie.mp4"
+
+# Example interaction:
+# 🎯 Target Specific Speakers (Optional)
+# Do you want to target specific speakers? [y/N]: y
+# Enter speaker/character name: Harry Potter
+# ✅ Added: Harry Potter
+# Add another speaker? [y/N]: y  
+# Enter speaker/character name: Hermione
+# ✅ Added: Hermione
+# 🎯 Will target: Harry Potter, Hermione
+```
+
+### 💬 Interactive Chat Refinement
+After initial processing, you can chat with Gemini to fine-tune each character's audio segments:
+
+**Example Chat Commands:**
+- `"Focus on the emotional dialogue"`
+- `"Remove segments with background noise"`  
+- `"Keep only clear speech, no whispering"`
+- `"Prioritize segments where the character sounds angry"`
+- `"Remove parts where other characters are talking"`
+
+**Chat Flow:**
+```
+💬 Interactive Refinement Chat for Harry Potter
+📋 Current segments for Harry Potter (12 segments):
+  1. 0:15 - 0:23
+  2. 0:45 - 0:52
+  ...
+📊 Total duration: 45.2s
+
+💬 Chat with Gemini (or 'done'/'restart'): Focus on emotional parts
+🤖 Gemini is processing your request...
+✅ Gemini refined segments (high)
+💡 Explanation: Kept segments with strong emotional delivery, removed neutral dialogue
+```
+
+**Special Commands:**
+- `done` - Finish refinement when satisfied
+- `restart` - Reset to original timestamps
+- Any natural language instruction for segment refinement
 
 ## Multi-Video Strategy
 
@@ -178,21 +301,30 @@ poetry run voice-trainer \
 
 ### Smart Multi-Video Processing:
 1. **🎬 Multi-Input**: Provide multiple YouTube URLs and/or local audio files
-2. **📥 Batch Download**: All audio sources are downloaded/loaded first
-3. **🔗 Intelligent Stitching**: Combine all audio into one long file with 2s buffers
-4. **🎵 Music Removal** *(Optional)*: Remove background music from combined audio
-5. **🔊 Single Voice Separation**: Run voice separation once on the combined audio
-6. **🎧 Interactive Selection**: Preview and choose which voice tracks to keep
+2. **📥 Batch Download**: All audio sources are downloaded/loaded first (with caching)
+3. **🔇 VAD Pre-processing**: Remove silence/gaps from each video using Voice Activity Detection
+4. **🔗 Intelligent Stitching**: Combine cleaned audio with 0.5s buffers between segments
+5. **🎵 Music Removal** *(Optional/Skippable)*: Remove background music from combined audio
+6. **🔊 Single Voice Separation**: Run voice separation once on the optimized combined audio
+   - **📈 Detailed Progress**: Real-time progress tracking with pyannote ProgressHook
+   - Shows processing stages, completion percentages, and timing estimates
+7. **🎧 Interactive Selection**: Preview and choose which voice tracks to keep
    - Each track contains segments from ALL videos automatically
    - Play audio previews for each separated voice
    - Keep, discard, or skip each track
    - Beautiful terminal interface with tables and progress bars
 
 ### Final Processing:
-7. **🏷️ Character Labeling**: Label the long voice tracks with character names
-8. **🔇 Silence Removal**: Automatically remove silence using VAD
-9. **🐟 Model Training**: Create Fish Audio models with full-length character audio
-10. **📈 Results**: Get model IDs for high-quality character voices
+8. **🏷️ Character Labeling**: Label the long voice tracks with character names
+9. **🔇 Final VAD**: Additional silence removal using VAD for clean training audio
+10. **🐟 Model Training**: Create Fish Audio models with full-length character audio
+11. **📈 Results**: Get model IDs for high-quality character voices
+
+### Progress Tracking Features:
+- **Real-time Updates**: See exactly what pyannote is doing at each stage
+- **No Conflicts**: Clean progress display without overlapping spinners
+- **Timing Estimates**: Duration tracking for each processing step
+- **Visual Feedback**: Color-coded status messages and progress indicators
 
 ### Key Advantages:
 - ✅ **Full-Length Audio**: No automatic trimming - you get complete voice tracks

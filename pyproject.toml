@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "A smart tool for training AI voice models from YouTube videos and audio files"
 authors = ["Your Name <your.email@example.com>"]
 readme = "README.md"
-packages = [{include = "voice_trainer.py"}]
+packages = [{include = "voice_trainer_app"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
@@ -19,10 +19,14 @@ onnxruntime-gpu = "^1.22.0"
 rich = "^13.7.0"
 webrtcvad = "^2.0.10"
 numpy = ">=2"
+scipy = "^1.14.0"
 yt-dlp = "^2025.6.25"
+google-generativeai = "^0.8.3"
+pydantic = "^2.0.0"
+rich-click = "^1.8.0"
 
 [tool.poetry.scripts]
-voice-trainer = "voice_trainer:main"
+voice-trainer = "main:app"
 
 [build-system]
 requires = ["poetry-core"]

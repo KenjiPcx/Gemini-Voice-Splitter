@@ -27,6 +27,8 @@ from rich.panel import Panel
 import webrtcvad
 import numpy as np
 from collections import defaultdict
+import google.generativeai as genai
+import json
 
 # Suppress common warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="torchmetrics")
@@ -39,12 +41,14 @@ console = Console()
 
 
 class VoiceTrainer:
-    def __init__(self, hf_token: str, fish_api_key: str, remove_music: bool = False, separator_model: Optional[str] = None, skip_music_separation: bool = False):
+    def __init__(self, hf_token: str, fish_api_key: str, remove_music: bool = False, separator_model: Optional[str] = None, skip_music_separation: bool = False, gemini_api_key: Optional[str] = None, use_gemini: bool = False):
         self.hf_token = hf_token
         self.fish_api_key = fish_api_key
         self.remove_music = remove_music
         self.separator_model = separator_model
         self.skip_music_separation = skip_music_separation
+        self.gemini_api_key = gemini_api_key
+        self.use_gemini = use_gemini
         self.pipeline = None
         self.separator = None
         self.temp_dir = None
@@ -53,6 +57,139 @@ class VoiceTrainer:
         
         # Create persistent downloads directory
         os.makedirs(self.downloads_dir, exist_ok=True)
+        
+        # Setup Gemini if requested
+        if self.use_gemini and self.gemini_api_key:
+            self.setup_gemini()
+    
+    def setup_gemini(self):
+        """Initialize Gemini API"""
+        try:
+            console.print("🤖 Setting up Gemini API...", style="cyan")
+            genai.configure(api_key=self.gemini_api_key)
+            self.gemini_model = genai.GenerativeModel('gemini-2.5-flash')
+            console.print("✅ Gemini API ready", style="green")
+        except Exception as e:
+            console.print(f"❌ Error setting up Gemini: {e}", style="red")
+            self.use_gemini = False
+    
+    def analyze_audio_with_gemini(self, audio_file: str) -> Dict[str, List[Tuple[str, str]]]:
+        """Use Gemini to analyze audio and extract speaker timestamps"""
+        try:
+            console.print("🤖 Analyzing audio with Gemini...", style="cyan")
+            
+            # Upload audio file to Gemini
+            console.print("📤 Uploading audio to Gemini...", style="cyan")
+            audio_file_obj = genai.upload_file(audio_file)
+            
+            prompt = """
+            Please analyze this audio file and identify different speakers. For each distinct speaker you detect, provide:
+
+            1. A brief description of their voice characteristics (e.g., "Deep male voice", "Higher-pitched female voice", "Child's voice", etc.)
+            2. All the timestamps where that speaker is talking in MM:SS - MM:SS format
+
+            Please be conservative and only include timestamps where you're confident about the speaker identity. Format your response as JSON like this:
+
+            {
+                "Speaker 1 (Deep male voice)": [
+                    ["0:05", "0:12"],
+                    ["0:25", "0:31"]
+                ],
+                "Speaker 2 (Higher female voice)": [
+                    ["0:13", "0:24"],
+                    ["0:32", "0:45"]
+                ]
+            }
+
+            Only include speakers that have at least 3 seconds of total speaking time. Be precise with timestamps and conservative with speaker identification.
+            """
+            
+            console.print("🧠 Gemini is analyzing the audio...", style="cyan")
+            response = self.gemini_model.generate_content([audio_file_obj, prompt])
+            
+            # Parse JSON response
+            try:
+                # Extract JSON from response
+                response_text = response.text.strip()
+                if response_text.startswith('```json'):
+                    response_text = response_text[7:-3]
+                elif response_text.startswith('```'):
+                    response_text = response_text[3:-3]
+                
+                speaker_data = json.loads(response_text)
+                
+                # Convert to the format we need (list of tuples)
+                formatted_data = {}
+                for speaker, timestamps in speaker_data.items():
+                    formatted_data[speaker] = [(start, end) for start, end in timestamps]
+                
+                console.print(f"✅ Gemini found {len(formatted_data)} speakers", style="green")
+                return formatted_data
+                
+            except json.JSONDecodeError as e:
+                console.print(f"❌ Error parsing Gemini response: {e}", style="red")
+                console.print(f"Response was: {response.text[:200]}...", style="yellow")
+                return {}
+                
+        except Exception as e:
+            console.print(f"❌ Error analyzing audio with Gemini: {e}", style="red")
+            return {}
+    
+    def refine_speaker_with_gemini(self, audio_file: str, speaker_name: str, description: str) -> List[Tuple[str, str]]:
+        """Use Gemini to refine timestamps for a specific speaker"""
+        try:
+            console.print(f"🤖 Refining timestamps for [bold]{speaker_name}[/bold] with Gemini...", style="cyan")
+            
+            # Upload audio file to Gemini
+            audio_file_obj = genai.upload_file(audio_file)
+            
+            prompt = f"""
+            This audio clip should contain the voice of {speaker_name} ({description}). 
+
+            Please analyze this audio and provide ONLY the timestamps where you are 100% confident that {speaker_name} is speaking clearly and audibly. Be very conservative - it's better to exclude uncertain segments than include wrong ones.
+
+            Provide your response as a JSON array of timestamp pairs in MM:SS format:
+
+            [
+                ["0:02", "0:08"],
+                ["0:15", "0:22"],
+                ["0:35", "0:41"]
+            ]
+
+            Only include segments where:
+            1. You're completely sure it's {speaker_name} speaking
+            2. The audio quality is good
+            3. There's minimal background noise or other speakers
+            4. The segment is at least 1 second long
+
+            If you're not confident about any segments, return an empty array [].
+            """
+            
+            console.print("🧠 Gemini is refining the voice segments...", style="cyan")
+            response = self.gemini_model.generate_content([audio_file_obj, prompt])
+            
+            # Parse JSON response
+            try:
+                response_text = response.text.strip()
+                if response_text.startswith('```json'):
+                    response_text = response_text[7:-3]
+                elif response_text.startswith('```'):
+                    response_text = response_text[3:-3]
+                
+                timestamps = json.loads(response_text)
+                refined_timestamps = [(start, end) for start, end in timestamps]
+                
+                console.print(f"✅ Gemini refined to {len(refined_timestamps)} high-confidence segments", style="green")
+                return refined_timestamps
+                
+            except json.JSONDecodeError as e:
+                console.print(f"❌ Error parsing Gemini refinement response: {e}", style="red")
+                console.print(f"Response was: {response.text[:200]}...", style="yellow")
+                return []
+                
+        except Exception as e:
+            console.print(f"❌ Error refining speaker with Gemini: {e}", style="red")
+            return []
         
     def setup_pipeline(self):
         """Initialize the pyannote pipeline"""
@@ -191,30 +328,45 @@ class VoiceTrainer:
     
     def separate_voices(self, audio_path: str) -> List[str]:
         """Separate voices using pyannote speech separation with progress tracking"""
-        console.print("🗣️ Separating voices...", style="cyan")
+        console.print("🗣️ Separating voices with detailed progress tracking...", style="cyan")
         
         try:
-            # Use pyannote's built-in progress tracking
+            # Use pyannote's built-in progress tracking (displays detailed progress)
             with ProgressHook() as hook:
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    console=console,
-                ) as progress:
-                    task = progress.add_task("Analyzing and separating speakers...", total=None)
-                    diarization, sources = self.pipeline(audio_path, hook=hook)
-                    progress.update(task, completed=100)
+                diarization, sources = self.pipeline(audio_path, hook=hook)
             
             separated_files = []
-            for i, (_, source) in enumerate(sources.items()):
-                # Convert to AudioSegment for easier manipulation
-                temp_path = os.path.join(self.temp_dir, f"temp_source_{i}.wav")
-                source_audio = AudioSegment.from_file(temp_path)
-                
-                # Save the full audio without trimming
-                output_path = os.path.join(self.temp_dir, f"voice_{i}.wav")
-                source_audio.export(output_path, format="wav")
-                separated_files.append(output_path)
+            
+            # Extract speakers from diarization and corresponding sources
+            speakers = list(diarization.labels())
+            
+            # Get the sample rate from the sources object (e.g., 16000)
+            sample_rate = getattr(sources, 'sample_rate', 16000)
+            
+            for i, speaker in enumerate(speakers):
+                try:
+                    # Extract the source audio data for this speaker as a numpy array
+                    source_data = sources.data[:, i]
+                    
+                    # Convert from float32 to 16-bit PCM for WAV format
+                    source_data_16bit = (np.clip(source_data, -1.0, 1.0) * 32767).astype(np.int16)
+                    
+                    # Create an AudioSegment directly from the raw audio data in memory
+                    source_audio = AudioSegment(
+                        data=source_data_16bit.tobytes(),
+                        sample_width=source_data_16bit.dtype.itemsize,  # Should be 2 for 16-bit audio
+                        frame_rate=sample_rate,
+                        channels=1  # pyannote sources are mono
+                    )
+                    
+                    # Export the in-memory audio segment to its final WAV file
+                    output_path = os.path.join(self.temp_dir, f"voice_{i}_{speaker}.wav")
+                    source_audio.export(output_path, format="wav")
+                    separated_files.append(output_path)
+                    
+                except Exception as e:
+                    console.print(f"⚠️ Failed to process source for speaker {speaker} (track {i}): {e}", style="yellow")
+                    continue
             
             console.print(f"✅ Found {len(separated_files)} voice tracks", style="green")
             return separated_files
@@ -615,6 +767,184 @@ class VoiceTrainer:
         
         return model_ids
     
+    def parse_timestamp(self, timestamp_str: str) -> float:
+        """Parse timestamp in format MM:SS to seconds"""
+        try:
+            parts = timestamp_str.strip().split(':')
+            if len(parts) == 2:
+                minutes, seconds = parts
+                return int(minutes) * 60 + int(seconds)
+            elif len(parts) == 3:
+                hours, minutes, seconds = parts
+                return int(hours) * 3600 + int(minutes) * 60 + int(seconds)
+            else:
+                raise ValueError(f"Invalid timestamp format: {timestamp_str}")
+        except ValueError as e:
+            console.print(f"❌ Error parsing timestamp '{timestamp_str}': {e}", style="red")
+            return 0.0
+    
+    def extract_audio_segments_from_timestamps(self, audio_file: str, timestamps: List[Tuple[str, str]], speaker_name: str) -> AudioSegment:
+        """Extract and stitch audio segments based on timestamps"""
+        try:
+            # Load the source audio file
+            audio = AudioSegment.from_file(audio_file)
+            console.print(f"🎵 Loaded audio: {len(audio)/1000:.1f}s", style="cyan")
+            
+            segments = []
+            total_extracted_duration = 0
+            
+            console.print(f"📋 Extracting {len(timestamps)} segments for [bold]{speaker_name}[/bold]", style="cyan")
+            
+            for start_str, end_str in timestamps:
+                start_seconds = self.parse_timestamp(start_str)
+                end_seconds = self.parse_timestamp(end_str)
+                
+                # Convert to milliseconds for pydub
+                start_ms = int(start_seconds * 1000)
+                end_ms = int(end_seconds * 1000)
+                
+                # Extract segment
+                if start_ms < len(audio) and end_ms <= len(audio) and start_ms < end_ms:
+                    segment = audio[start_ms:end_ms]
+                    segments.append(segment)
+                    duration = (end_ms - start_ms) / 1000
+                    total_extracted_duration += duration
+                    console.print(f"  ✅ {start_str} - {end_str} ({duration:.1f}s)", style="green")
+                else:
+                    console.print(f"  ⚠️ Invalid timestamp range: {start_str} - {end_str}", style="yellow")
+            
+            if not segments:
+                console.print(f"❌ No valid segments extracted for {speaker_name}", style="red")
+                return AudioSegment.empty()
+            
+            # Stitch segments together with small buffers
+            console.print(f"🔗 Stitching {len(segments)} segments...", style="cyan")
+            buffer = AudioSegment.silent(duration=500)  # 0.5 second buffer
+            
+            final_audio = segments[0]
+            for segment in segments[1:]:
+                final_audio += buffer + segment
+            
+            console.print(f"✅ [bold]{speaker_name}[/bold]: {total_extracted_duration:.1f}s extracted, {len(final_audio)/1000:.1f}s final", style="green")
+            return final_audio
+            
+        except Exception as e:
+            console.print(f"❌ Error extracting segments for {speaker_name}: {e}", style="red")
+            return AudioSegment.empty()
+    
+    def create_speaker_files_from_timestamps(self, audio_file: str, timestamp_data: Dict[str, List[Tuple[str, str]]], output_dir: str = None) -> List[str]:
+        """Create separate audio files for each speaker based on timestamps"""
+        output_files = []
+        
+        # Use current directory if no output dir specified
+        if output_dir is None:
+            output_dir = os.getcwd()
+        
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+        
+        console.print(f"\n🎭 [bold]Creating speaker files from timestamps...[/bold]", style="blue")
+        console.print(f"📁 Source audio: {os.path.basename(audio_file)}")
+        console.print(f"📂 Output directory: {output_dir}")
+        console.print(f"👥 Speakers: {list(timestamp_data.keys())}")
+        
+        for speaker_name, timestamps in timestamp_data.items():
+            console.print(f"\n🎤 Processing [bold]{speaker_name}[/bold] ({len(timestamps)} segments)")
+            
+            # Extract and stitch segments for this speaker
+            speaker_audio = self.extract_audio_segments_from_timestamps(audio_file, timestamps, speaker_name)
+            
+            if len(speaker_audio) > 0:
+                # Create safe filename
+                safe_speaker_name = speaker_name.replace(' ', '_').replace('(', '').replace(')', '').replace(',', '')
+                output_path = os.path.join(output_dir, f"speaker_{safe_speaker_name}.wav")
+                speaker_audio.export(output_path, format="wav")
+                output_files.append(output_path)
+                console.print(f"💾 Saved: {output_path}", style="green")
+            else:
+                console.print(f"⚠️ No audio extracted for {speaker_name}", style="yellow")
+        
+        console.print(f"\n✅ Created {len(output_files)} speaker files in {output_dir}", style="green")
+        return output_files
+    
+    def remove_audio_segments_by_timestamps(self, audio_file: str, removal_timestamps: List[Tuple[str, str]], output_path: str = None) -> str:
+        """Remove specific audio segments based on timestamps"""
+        try:
+            # Load the source audio file
+            audio = AudioSegment.from_file(audio_file)
+            console.print(f"🎵 Loaded audio: {len(audio)/1000:.1f}s", style="cyan")
+            
+            # Convert timestamps to milliseconds and sort them
+            removal_intervals = []
+            for start_str, end_str in removal_timestamps:
+                start_seconds = self.parse_timestamp(start_str)
+                end_seconds = self.parse_timestamp(end_str)
+                start_ms = int(start_seconds * 1000)
+                end_ms = int(end_seconds * 1000)
+                
+                # Validate interval
+                if start_ms < len(audio) and end_ms <= len(audio) and start_ms < end_ms:
+                    removal_intervals.append((start_ms, end_ms))
+                    console.print(f"  🗑️ Will remove: {start_str} - {end_str} ({(end_ms-start_ms)/1000:.1f}s)", style="yellow")
+                else:
+                    console.print(f"  ⚠️ Invalid removal range: {start_str} - {end_str}", style="yellow")
+            
+            if not removal_intervals:
+                console.print("❌ No valid removal intervals found", style="red")
+                return audio_file
+            
+            # Sort intervals by start time
+            removal_intervals.sort(key=lambda x: x[0])
+            
+            console.print(f"🔪 Removing {len(removal_intervals)} segments...", style="cyan")
+            
+            # Build new audio by keeping segments between removals
+            result_audio = AudioSegment.empty()
+            last_end = 0
+            total_removed_duration = 0
+            
+            for start_ms, end_ms in removal_intervals:
+                # Add the segment before this removal
+                if start_ms > last_end:
+                    segment = audio[last_end:start_ms]
+                    result_audio += segment
+                    console.print(f"  ✅ Kept: {last_end/1000:.1f}s - {start_ms/1000:.1f}s ({len(segment)/1000:.1f}s)", style="green")
+                
+                # Track removed duration
+                removed_duration = (end_ms - start_ms) / 1000
+                total_removed_duration += removed_duration
+                console.print(f"  🗑️ Removed: {start_ms/1000:.1f}s - {end_ms/1000:.1f}s ({removed_duration:.1f}s)", style="red")
+                
+                last_end = end_ms
+            
+            # Add the remaining audio after the last removal
+            if last_end < len(audio):
+                final_segment = audio[last_end:]
+                result_audio += final_segment
+                console.print(f"  ✅ Kept final: {last_end/1000:.1f}s - {len(audio)/1000:.1f}s ({len(final_segment)/1000:.1f}s)", style="green")
+            
+            # Generate output path if not provided
+            if output_path is None:
+                base_name = os.path.splitext(os.path.basename(audio_file))[0]
+                output_dir = os.path.dirname(audio_file) or os.getcwd()
+                output_path = os.path.join(output_dir, f"{base_name}_cleaned.wav")
+            
+            # Save the cleaned audio
+            result_audio.export(output_path, format="wav")
+            
+            original_duration = len(audio) / 1000
+            final_duration = len(result_audio) / 1000
+            
+            console.print(f"✅ [bold green]Audio cleaned successfully![/bold green]", style="green")
+            console.print(f"📊 Original: {original_duration:.1f}s → Final: {final_duration:.1f}s (removed {total_removed_duration:.1f}s)", style="cyan")
+            console.print(f"💾 Saved: {output_path}", style="green")
+            
+            return output_path
+            
+        except Exception as e:
+            console.print(f"❌ Error removing audio segments: {e}", style="red")
+            return audio_file
+    
     def download_all_sources(self, input_sources: List[str]) -> List[str]:
         """Download all audio sources first"""
         audio_files = []
@@ -756,21 +1086,280 @@ class VoiceTrainer:
             # Cleanup
             if self.temp_dir and os.path.exists(self.temp_dir):
                 shutil.rmtree(self.temp_dir)
+    
+    def process_with_gemini(self, input_sources: List[str]) -> List[str]:
+        """Main processing function using Gemini for speaker separation"""
+        self.temp_dir = tempfile.mkdtemp()
+        
+        try:
+            # Setup music separator only
+            self.setup_music_separator()
+            
+            if not self.use_gemini:
+                console.print("❌ Gemini is not enabled. Use --gemini-api-key to enable.", style="red")
+                return []
+            
+            # Step 1: Download all audio sources
+            audio_files = self.download_all_sources(input_sources)
+            
+            if not audio_files:
+                console.print("❌ No audio files downloaded", style="red")
+                return []
+            
+            # Step 2: Stitch all audio together
+            combined_audio_path = self.stitch_all_audio(audio_files)
+            
+            # Step 3: Remove background music from combined audio (if enabled)
+            clean_audio_path = self.remove_background_music(combined_audio_path)
+            
+            # Step 4: Analyze audio with Gemini to get speaker timestamps
+            console.print(f"\n🤖 [bold]Analyzing combined audio with Gemini...[/bold]", style="blue")
+            speaker_timestamps = self.analyze_audio_with_gemini(clean_audio_path)
+            
+            if not speaker_timestamps:
+                console.print("❌ Gemini could not identify any speakers", style="red")
+                return []
+            
+            console.print(f"✅ Gemini found {len(speaker_timestamps)} speakers", style="green")
+            
+            # Step 5: Create initial speaker files from Gemini timestamps
+            output_dir = os.path.join(self.temp_dir, "gemini_speakers")
+            initial_speaker_files = self.create_speaker_files_from_timestamps(clean_audio_path, speaker_timestamps, output_dir)
+            
+            if not initial_speaker_files:
+                console.print("❌ No speaker files created from Gemini analysis", style="red")
+                return []
+            
+            # Step 6: Interactive review and refinement
+            console.print(f"\n🎭 [bold]Review and refine speakers...[/bold]", style="blue")
+            model_ids = []
+            
+            for speaker_file in initial_speaker_files:
+                # Get speaker name from filename
+                filename = os.path.basename(speaker_file)
+                # Extract original speaker name from filename (remove "speaker_" prefix and ".wav" suffix)
+                original_speaker_name = filename.replace("speaker_", "").replace(".wav", "").replace("_", " ")
+                
+                console.print(f"\n🎤 [bold]Processing: {original_speaker_name}[/bold]", style="cyan")
+                
+                # Ask user if they want to keep this speaker
+                if not Confirm.ask(f"Keep {original_speaker_name}?", default=True):
+                    console.print("⏭️ Skipping speaker", style="yellow")
+                    continue
+                
+                # Let user edit the character name and description
+                character_name = Prompt.ask("Character name", default=original_speaker_name.split("(")[0].strip())
+                description = Prompt.ask("Character description", default=original_speaker_name)
+                
+                # Refine with Gemini for high-confidence segments
+                console.print(f"🤖 Asking Gemini to refine timestamps for [bold]{character_name}[/bold]...", style="cyan")
+                refined_timestamps = self.refine_speaker_with_gemini(speaker_file, character_name, description)
+                
+                if not refined_timestamps:
+                    console.print(f"⚠️ Gemini couldn't find confident segments for {character_name}", style="yellow")
+                    
+                    # Ask if user wants to keep the original version
+                    if Confirm.ask("Keep original version anyway?", default=False):
+                        refined_timestamps = speaker_timestamps.get(original_speaker_name, [])
+                    else:
+                        continue
+                
+                # Create final refined audio
+                if refined_timestamps:
+                    console.print(f"🔧 Creating refined audio for [bold]{character_name}[/bold]...", style="cyan")
+                    final_audio = self.extract_audio_segments_from_timestamps(speaker_file, refined_timestamps, character_name)
+                    
+                    if len(final_audio) > 5000:  # At least 5 seconds
+                        # Save final audio
+                        final_audio_path = os.path.join(self.temp_dir, f"final_{character_name.replace(' ', '_')}.wav")
+                        final_audio.export(final_audio_path, format="wav")
+                        
+                        # Create Fish Audio model
+                        model_id = self.create_fish_model(final_audio_path, character_name, description)
+                        if model_id:
+                            model_ids.append(model_id)
+                            console.print(f"✅ Created model for [bold]{character_name}[/bold]: {model_id}", style="green")
+                    else:
+                        console.print(f"⚠️ Not enough refined audio for {character_name} ({len(final_audio)/1000:.1f}s)", style="yellow")
+            
+            return model_ids
+            
+        finally:
+            # Cleanup
+            if self.temp_dir and os.path.exists(self.temp_dir):
+                shutil.rmtree(self.temp_dir)
 
 
-@click.command()
+def test_timestamp_extraction():
+    """Test function with your sample timestamp data"""
+    # Sample timestamp data
+    timestamp_data = {
+        "Speaker 1 (Deeper, raspy voice)": [
+            ("0:06", "0:08"), ("0:22", "0:25"), ("0:28", "0:39"), ("1:15", "1:18"),
+            ("1:21", "1:22"), ("1:23", "1:28"), ("1:46", "1:51"), ("2:03", "2:04"),
+            ("2:51", "2:57"), ("2:58", "2:59"), ("3:42", "3:44"), ("4:08", "4:11"),
+            ("4:14", "4:15"), ("4:18", "4:21"), ("4:30", "4:33"), ("4:42", "4:44"),
+            ("4:56", "5:02")
+        ],
+        "Speaker 2 (Higher-pitched, more excitable voice)": [
+            ("0:03", "0:05"), ("0:09", "0:09"), ("0:13", "0:16"), ("0:49", "0:50"),
+            ("1:05", "1:07"), ("1:12", "1:14"), ("1:32", "1:35"), ("1:37", "1:43"),
+            ("1:52", "2:02"), ("2:21", "2:22"), ("2:27", "2:28"), ("3:24", "3:25"),
+            ("3:48", "3:52"), ("4:53", "4:55"), ("6:13", "6:20"), ("6:35", "6:36"),
+            ("6:46", "6:49"), ("6:51", "6:53"), ("7:04", "7:11"), ("7:16", "7:21"),
+            ("7:26", "7:32"), ("8:01", "8:08"), ("8:11", "8:18"), ("8:22", "8:29"),
+            ("8:50", "8:51"), ("8:54", "8:56"), ("9:06", "9:08"), ("9:19", "9:21"),
+            ("9:25", "9:27")
+        ],
+        "Speaker 3 (Whiny, nasally voice)": [
+            ("0:18", "0:21"), ("0:54", "0:57"), ("1:18", "1:20"), ("1:22", "1:23"),
+            ("1:29", "1:30"), ("1:35", "1:37"), ("1:44", "1:45"), ("2:28", "2:29"),
+            ("3:26", "3:28"), ("3:44", "3:48"), ("4:09", "4:10"), ("4:15", "4:16"),
+            ("4:24", "4:26"), ("5:03", "5:05"), ("5:07", "5:14"), ("5:25", "5:31"),
+            ("6:01", "6:09"), ("6:20", "6:30"), ("6:32", "6:34"), ("6:37", "6:40"),
+            ("7:12", "7:16"), ("7:21", "7:26"), ("7:28", "7:31"), ("8:30", "8:31"),
+            ("8:39", "8:45"), ("8:46", "8:49"), ("9:21", "9:24"), ("9:27", "9:28")
+        ],
+        "Speaker 4 (Calm, normal-pitched male voice)": [
+            ("0:16", "0:18"), ("0:25", "0:28"), ("0:40", "0:45"), ("0:48", "0:49"),
+            ("0:51", "0:51"), ("1:01", "1:04"), ("1:07", "1:08"), ("3:30", "3:38")
+        ]
+    }
+    
+    console.print("\n🧪 [bold]Running Timestamp Extraction Test[/bold]", style="blue")
+    console.print("This will extract audio segments based on the provided timestamps")
+    
+    # Get audio file path from user
+    audio_file = Prompt.ask("📁 Enter path to audio file (vocal/separated audio)")
+    
+    if not os.path.exists(audio_file):
+        console.print(f"❌ Audio file not found: {audio_file}", style="red")
+        return
+    
+    # Get output directory from user
+    output_dir = Prompt.ask("📂 Output directory for speaker files", default="./speaker_outputs")
+    
+    # Create trainer instance (no tokens needed for timestamp extraction)
+    trainer = VoiceTrainer("dummy", "dummy")
+    
+    # Extract speaker files to permanent location
+    output_files = trainer.create_speaker_files_from_timestamps(audio_file, timestamp_data, output_dir)
+    
+    if output_files:
+        console.print(f"\n🎉 [bold green]Success![/bold green] Created {len(output_files)} speaker files:", style="green")
+        for file_path in output_files:
+            console.print(f"  📄 {file_path}", style="cyan")
+            
+            # Show file info
+            try:
+                audio = AudioSegment.from_file(file_path)
+                console.print(f"     Duration: {len(audio)/1000:.1f}s", style="dim")
+            except Exception as e:
+                console.print(f"     Error loading: {e}", style="yellow")
+                
+        console.print(f"\n💡 [bold]Files saved permanently in:[/bold] {os.path.abspath(output_dir)}", style="blue")
+    else:
+        console.print("❌ No speaker files created", style="red")
+
+
+def test_sound_removal():
+    """Test function for sound removal with sample timestamps"""
+    # Sample removal timestamps
+    removal_timestamps = [
+       ("00:05", "00:06"),
+       ("00:17", "00:20"),
+       ("00:22", "00:23"),
+       ("00:33", "00:34"),
+       ("00:41", "00:42"),
+       ("00:43", "00:45"),
+       ("00:45", "00:47"),
+       ("00:47", "00:48"),
+       ("00:49", "00:50"),
+       ("00:51", "00:53"),
+       ("00:54", "00:56"),
+       ("00:57", "01:02"),
+    ]
+    
+    console.print("\n🧪 [bold]Running Sound Removal Test[/bold]", style="blue")
+    console.print("This will remove specific audio segments based on timestamps")
+    
+    # Get audio file path from user
+    audio_file = Prompt.ask("📁 Enter path to audio file")
+    
+    if not os.path.exists(audio_file):
+        console.print(f"❌ Audio file not found: {audio_file}", style="red")
+        return
+    
+    # Get output file path
+    default_output = os.path.splitext(audio_file)[0] + "_cleaned.wav"
+    output_file = Prompt.ask("💾 Output file path", default=default_output)
+    
+    # Create trainer instance (no tokens needed for audio processing)
+    trainer = VoiceTrainer("dummy", "dummy")
+    
+    # Remove audio segments
+    console.print(f"\n🗑️ [bold]Removing {len(removal_timestamps)} audio segments...[/bold]", style="yellow")
+    
+    result_file = trainer.remove_audio_segments_by_timestamps(audio_file, removal_timestamps, output_file)
+    
+    if result_file != audio_file:
+        console.print(f"\n🎉 [bold green]Success![/bold green] Audio cleaned and saved:", style="green")
+        console.print(f"  📄 {result_file}", style="cyan")
+        
+        # Show file info
+        try:
+            original_audio = AudioSegment.from_file(audio_file)
+            cleaned_audio = AudioSegment.from_file(result_file)
+            original_duration = len(original_audio) / 1000
+            cleaned_duration = len(cleaned_audio) / 1000
+            removed_duration = original_duration - cleaned_duration
+            
+            console.print(f"📊 Summary:", style="bold")
+            console.print(f"  • Original: {original_duration:.1f}s", style="dim")
+            console.print(f"  • Cleaned: {cleaned_duration:.1f}s", style="dim")
+            console.print(f"  • Removed: {removed_duration:.1f}s", style="dim")
+            console.print(f"  • Reduction: {(removed_duration/original_duration)*100:.1f}%", style="dim")
+        except Exception as e:
+            console.print(f"     Error analyzing files: {e}", style="yellow")
+    else:
+        console.print("❌ No audio processing completed", style="red")
+
+
+@click.group()
+def cli():
+    """Super Voice Auto Trainer - Multi-Video Character Voice Training"""
+    pass
+
+
+@cli.command(name="test-timestamps")
+def test_timestamps_cmd():
+    """Test timestamp extraction with sample data"""
+    test_timestamp_extraction()
+
+
+@cli.command(name="test-removal")
+def test_removal_cmd():
+    """Test sound removal with sample timestamps"""
+    test_sound_removal()
+
+
+@cli.command(name="train")
 @click.argument('input_sources', nargs=-1, required=True)
-@click.option('--hf-token', envvar='HF_TOKEN', required=True, 
-              help='Hugging Face access token (or set HF_TOKEN env var)')
+@click.option('--hf-token', envvar='HF_TOKEN', required=False, 
+              help='Hugging Face access token (or set HF_TOKEN env var) - Required for pyannote')
 @click.option('--fish-api-key', envvar='FISH_API_KEY', required=True,
               help='Fish Audio API key (or set FISH_API_KEY env var)')
+@click.option('--gemini-api-key', envvar='GEMINI_API_KEY', required=False,
+              help='Gemini API key (or set GEMINI_API_KEY env var) - Use for Gemini-based speaker separation')
+@click.option('--use-gemini', is_flag=True, default=False,
+              help='Use Gemini for speaker separation instead of pyannote')
 @click.option('--remove-music', is_flag=True, default=False,
               help='Remove background music before voice separation')
 @click.option('--separator-model', default='UVR-MDX-NET-Inst_HQ_3.onnx',
                 help='Model to use for music separation. Defaults to UVR-MDX-NET-Inst_HQ_3.onnx')
 @click.option('--skip-music-separation', is_flag=True, default=False,
               help='Skip music separation step (useful if already processed)')
-def main(input_sources: tuple, hf_token: str, fish_api_key: str, remove_music: bool, separator_model: str, skip_music_separation: bool):
+def main(input_sources: tuple, hf_token: str, fish_api_key: str, gemini_api_key: str, use_gemini: bool, remove_music: bool, separator_model: str, skip_music_separation: bool):
     """
     Super Voice Auto Trainer - Multi-Video Character Voice Training
     
@@ -815,13 +1404,40 @@ def main(input_sources: tuple, hf_token: str, fish_api_key: str, remove_music: b
     config_table.add_row("Multi-Video Mode", "✅ Enabled")
     config_table.add_row("Voice Activity Detection", "✅ Enabled")
     config_table.add_row("VAD Pre-processing", "✅ Enabled (before voice separation)")
+    
+    # Determine processing method
+    if use_gemini:
+        if not gemini_api_key:
+            console.print("❌ Gemini API key required when using --use-gemini", style="red")
+            return
+        config_table.add_row("Speaker Separation", "🤖 Gemini AI")
+        config_table.add_row("Refinement", "🤖 Gemini AI (High Confidence)")
+    else:
+        if not hf_token:
+            console.print("❌ Hugging Face token required for pyannote speech separation", style="red")
+            return
+        config_table.add_row("Speaker Separation", "🔬 pyannote")
+    
     console.print(config_table)
     
-    print(hf_token)
-    print(fish_api_key)
+    # Create trainer with appropriate settings
+    trainer = VoiceTrainer(
+        hf_token=hf_token or "dummy", 
+        fish_api_key=fish_api_key, 
+        remove_music=remove_music, 
+        separator_model=separator_model, 
+        skip_music_separation=skip_music_separation,
+        gemini_api_key=gemini_api_key,
+        use_gemini=use_gemini
+    )
     
-    trainer = VoiceTrainer(hf_token, fish_api_key, remove_music, separator_model, skip_music_separation)
-    model_ids = trainer.process(list(input_sources))
+    # Choose processing method
+    if use_gemini:
+        console.print("\n🤖 [bold blue]Using Gemini AI for speaker separation[/bold blue]", style="cyan")
+        model_ids = trainer.process_with_gemini(list(input_sources))
+    else:
+        console.print("\n🔬 [bold blue]Using pyannote for speaker separation[/bold blue]", style="cyan")
+        model_ids = trainer.process(list(input_sources))
     
     # Results summary
     if model_ids:
@@ -851,4 +1467,4 @@ def main(input_sources: tuple, hf_token: str, fish_api_key: str, remove_music: b
 
 
 if __name__ == "__main__":
-    main()
+    cli()
