@@ -269,14 +269,24 @@ class AudioProcessor:
         try:
             # Use audio separator to isolate vocals
             output_dir = os.path.dirname(audio_path)
-            separator_outputs = separator.separate(audio_path, output_dir)
+            
+            # Call separator with proper parameters
+            if hasattr(separator, 'separate'):
+                separator_outputs = separator.separate(audio_path)
+            else:
+                # Fallback for older separator versions
+                separator_outputs = separator.process(audio_path, output_dir)
             
             # Look for vocals file
             vocals_file = None
-            for output_file in separator_outputs:
-                if 'vocals' in os.path.basename(output_file).lower():
-                    vocals_file = output_file
-                    break
+            if isinstance(separator_outputs, list):
+                for output_file in separator_outputs:
+                    if 'vocals' in os.path.basename(output_file).lower():
+                        vocals_file = output_file
+                        break
+            elif isinstance(separator_outputs, dict):
+                # Some separators return dict with 'vocals' key
+                vocals_file = separator_outputs.get('vocals')
             
             if vocals_file and os.path.exists(vocals_file):
                 console.print("✅ Background music removed", style="green")
@@ -475,6 +485,133 @@ class AudioProcessor:
         except Exception as e:
             console.print(f"❌ Error removing audio segments: {e}", style="red")
             return audio_file
+    
+    def apply_vad(self, audio_path: str, temp_dir: str) -> str:
+        """Apply Voice Activity Detection to remove silence"""
+        try:
+            console.print("🔇 Applying VAD to remove silence...", style="cyan")
+            
+            # Load audio
+            audio = AudioSegment.from_file(audio_path)
+            
+            # Apply VAD
+            cleaned_audio = self.remove_silence_with_vad(audio)
+            
+            # Save cleaned audio
+            output_path = os.path.join(temp_dir, "vad_cleaned.wav")
+            cleaned_audio.export(output_path, format="wav")
+            
+            original_duration = len(audio) / 1000
+            cleaned_duration = len(cleaned_audio) / 1000
+            
+            console.print(f"✅ VAD complete: {original_duration:.1f}s → {cleaned_duration:.1f}s", style="green")
+            return output_path
+            
+        except Exception as e:
+            console.print(f"❌ VAD failed: {e}", style="red")
+            return audio_path
+    
+    def separate_speakers(self, audio_path: str, temp_dir: str, pipeline) -> List[str]:
+        """Separate speakers using pyannote speech separation pipeline"""
+        try:
+            console.print("🔬 Running pyannote speech separation with progress tracking...", style="cyan")
+            
+            # Import progress hook
+            from pyannote.audio.pipelines.utils.hook import ProgressHook
+            import scipy.io.wavfile
+            import torch
+            import torchaudio
+            
+            # Pre-load audio for faster processing
+            console.print("📁 Loading audio file...", style="cyan")
+            waveform, sample_rate = torchaudio.load(audio_path)
+            audio_input = {"waveform": waveform, "sample_rate": sample_rate}
+            
+            # Run pipeline with progress tracking
+            console.print("🎯 Running speech separation pipeline...", style="cyan")
+            with ProgressHook() as hook:
+                result = pipeline(audio_input, hook=hook)
+            
+            # Handle the result - speech separation returns (diarization, sources)
+            if isinstance(result, tuple) and len(result) == 2:
+                diarization, sources = result
+                console.print("✅ Speech separation complete - using separated sources", style="green")
+                
+                # Save separated sources directly as SPEAKER_XX.wav files
+                speaker_files = []
+                for s, speaker in enumerate(diarization.labels()):
+                    speaker_file = os.path.join(temp_dir, f"speaker_{speaker}.wav")
+                    # sources.data shape: [samples, speakers]
+                    speaker_audio = sources.data[:, s]
+                    
+                    # Convert to numpy if it's a tensor, otherwise it's already numpy
+                    if hasattr(speaker_audio, 'numpy'):
+                        speaker_audio = speaker_audio.numpy()
+                    elif hasattr(speaker_audio, 'cpu'):
+                        speaker_audio = speaker_audio.cpu().numpy()
+                    
+                    # Ensure it's the right dtype for scipy
+                    if speaker_audio.dtype != 'float32':
+                        speaker_audio = speaker_audio.astype('float32')
+                    
+                    scipy.io.wavfile.write(speaker_file, sample_rate, speaker_audio)
+                    speaker_files.append(speaker_file)
+                    
+                    # Calculate duration
+                    duration = len(speaker_audio) / sample_rate
+                    console.print(f"💾 Saved speaker {speaker}: {duration:.1f}s")
+                
+                console.print(f"✅ Created {len(speaker_files)} separated speaker files", style="green")
+                return speaker_files
+                
+            else:
+                # Fallback: this might be just diarization without source separation
+                console.print("⚠️ No source separation - falling back to diarization-based extraction", style="yellow")
+                
+                # Group segments by speaker using diarization
+                from collections import defaultdict
+                speaker_segments = defaultdict(list)
+                
+                for turn, _, speaker in result.itertracks(yield_label=True):
+                    speaker_segments[speaker].append((turn.start, turn.end))
+                
+                # Create speaker audio files by extracting segments
+                audio = AudioSegment.from_file(audio_path)
+                speaker_files = []
+                
+                for speaker_id, segments in speaker_segments.items():
+                    console.print(f"👤 Extracting speaker {speaker_id} ({len(segments)} segments)")
+                    
+                    # Combine all segments for this speaker
+                    speaker_audio = AudioSegment.empty()
+                    buffer = AudioSegment.silent(duration=200)  # 0.2s buffer
+                    
+                    for start_time, end_time in segments:
+                        start_ms = int(start_time * 1000)
+                        end_ms = int(end_time * 1000)
+                        segment = audio[start_ms:end_ms]
+                        
+                        if len(speaker_audio) > 0:
+                            speaker_audio += buffer
+                        speaker_audio += segment
+                    
+                    # Save speaker audio file
+                    if len(speaker_audio) > 1000:  # At least 1 second
+                        speaker_file = os.path.join(temp_dir, f"speaker_{speaker_id}.wav")
+                        speaker_audio.export(speaker_file, format="wav")
+                        speaker_files.append(speaker_file)
+                        console.print(f"💾 Saved speaker {speaker_id}: {len(speaker_audio)/1000:.1f}s")
+                    else:
+                        console.print(f"⚠️ Speaker {speaker_id} too short, skipping")
+                
+                console.print(f"✅ Extracted {len(speaker_files)} speakers from diarization", style="green")
+                return speaker_files
+            
+        except Exception as e:
+            console.print(f"❌ Speaker separation failed: {e}", style="red")
+            import traceback
+            console.print(f"Full error: {traceback.format_exc()}", style="dim red")
+            return []
     
     def process_audio_files(self, audio_files: List[str], temp_dir: str, remove_music: bool, 
                            separator, skip_music_separation: bool, pipeline) -> List[str]:
